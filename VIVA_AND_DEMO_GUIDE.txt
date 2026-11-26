@@ -1,0 +1,276 @@
+================================================================================
+JIIT OPERATING SYSTEM LAB — PROJECT VIVA, WORK DISTRIBUTION & DEMO GUIDE
+Project: jsh (Shell Building from Scratch in C11 + POSIX)
+Supervisor: Prof. Umar Farooq | CSE Department, JIIT Sec-62, Noida | Batch: B14
+================================================================================
+
+--------------------------------------------------------------------------------
+1. WORK DISTRIBUTION AMONG TEAM MEMBERS (4 MEMBERS)
+--------------------------------------------------------------------------------
+
+Total Project Size: 1,611 lines across 19 code/build/test files (+ README.md)
+(Core C codebase: 1,320 lines across 8 headers [180] and 8 source files [1,140])
+
+1) Tarandeep Singh (2408030002) — Process Execution, Pipelines & Main Loop
+   Owned Files (428 lines):
+   - include/shell.h       (40 lines)  : Command, Pipeline, ShellState structs
+   - include/executor.h    (20 lines)  : Process execution interface
+   - include/pipeline.h    (13 lines)  : Multi-stage pipeline interface
+   - src/main.c            (51 lines)  : Main REPL workflow loop
+   - src/executor.c       (139 lines)  : fork(), execvp(), waitpid() handling
+   - src/pipeline.c       (165 lines)  : Multi-stage pipe(), dup2(), reaping
+   Key OS Concepts Owned:
+   - Process creation & replacement (fork + execvp)
+   - Synchronous foreground waiting & exit status decoding (waitpid, WIFEXITED)
+   - Inter-process communication via POSIX pipes and zero-FD-leak cleanup
+
+2) Tanmay Agarwal (2408030017) — Command Parser & Unit Testing
+   Owned Files (409 lines):
+   - include/parser.h      (21 lines)  : Parser result codes & API
+   - src/parser.c         (285 lines)  : Lexer, quote grouping, AST builder
+   - tests/test_parser.c  (103 lines)  : C unit test suite for parser
+   Key OS Concepts Owned:
+   - Lexical tokenization of whitespace, quotes ('...' / "..."), and operators
+   - Glued operator parsing (<, >, >>, |) and syntax error detection
+   - Dynamic memory management and leak-free cleanup (free_pipeline)
+
+3) Tanmay Malhotra (2408030008) — Input Reader, Signals & Built-in Commands
+   Owned Files (354 lines):
+   - include/input.h       (22 lines)  : Input reader & signal API
+   - include/builtins.h    (15 lines)  : Built-in command handler API
+   - src/input.c          (137 lines)  : getline(), dynamic prompt, SIGINT/SIGQUIT
+   - src/builtins.c       (180 lines)  : cd, pwd, trace, exit, help built-ins
+   Key OS Concepts Owned:
+   - Safe terminal input via getline() and EOF (Ctrl+D) handling
+   - POSIX signal handling via sigaction() (Ctrl+C interrupts child, not shell)
+   - Why built-ins like cd must run in the parent process (chdir, getcwd)
+
+4) Usaid Khan (2408030001) — I/O Redirection, Error Handling, Build & Integration Tests
+   Owned Files (420 lines + README.md):
+   - include/redirect.h    (18 lines)  : Redirection & stdio save/restore API
+   - include/error.h       (31 lines)  : Error, jsh_trace & checked-alloc API
+   - src/redirect.c        (92 lines)  : open(), dup2(), close() redirections
+   - src/error.c           (91 lines)  : jsh_error(), jsh_perror(), jsh_trace()
+   - Makefile              (44 lines)  : Strict C11 build, test & debug rules
+   - tests/run_tests.sh   (144 lines)  : Automated T1-T9 + trace tests
+   - README.md                         : Architecture & build documentation
+   Key OS Concepts Owned:
+   - File descriptor table manipulation (open, dup, dup2, close)
+   - Redirection for both external commands and built-ins (stdio save/restore)
+   - System call error checking (errno), live syscall tracing, and T1-T9 tests
+
+
+--------------------------------------------------------------------------------
+2. HOW TO PROVE jsh IS BUILT FROM SCRATCH (IF TEACHER ASKS:
+   "ISME WOHI SAB HAI JO NORMAL TERMINAL SHELL MEIN HOTA HAI?")
+--------------------------------------------------------------------------------
+
+If the teacher asks how this is different from a normal terminal shell or
+suspects you wrapped system()/Bash, show these 5 proofs live:
+
+Proof 1 — Live OS Syscall & FD Visualizer ('trace on' built-in):
+  Unlike a normal shell (Bash/Zsh), jsh has a built-in 'trace on' mode that
+  prints every kernel syscall, PID, and file descriptor number in real time!
+  Run inside ./jsh:
+    trace on
+    ls src | grep .c > out.txt
+    cd /tmp
+    cd -
+    trace off
+  The teacher literally sees:
+    - parse: 2 command stage(s)
+    - pipe() [stage 0 -> 1] -> read_fd=3, write_fd=4
+    - fork() -> stage[0] pid=... ("ls"), dup2(fd=4 -> STDOUT_FILENO)
+    - fork() -> stage[1] pid=... ("grep"), dup2(fd=3 -> STDIN_FILENO),
+      open("out.txt", ...) -> fd=..., dup2(..., STDOUT_FILENO)
+    - waitpid(...) -> status=0
+    - builtin cd: chdir("/tmp") in parent pid=... (no fork!)
+
+Proof 2 — Process Hierarchy Check ('ps'):
+  Run inside ./jsh:
+    ps -o pid,ppid,comm
+  - Shows 'ps' has PPID = jsh (not bash), proving jsh directly forks and
+    execvp()s programs itself.
+
+Proof 3 — Prove It Is NOT Calling system() or /bin/sh:
+  Run inside ./jsh:
+    echo $HOME
+  - Bash expands $HOME to /home/<user>.
+  - jsh prints '$HOME' literally because our own C parser (src/parser.c)
+    tokenizes input directly without env-variable expansion (per Synopsis
+    Section 2). If we used system(), /bin/sh would have expanded it.
+
+Proof 4 — Binary Inspection (Zero Shell Libraries, Raw POSIX Syscalls):
+  Run from normal bash before/after demo:
+    ldd ./jsh
+    nm -u ./jsh | grep -E "fork|execvp|waitpid|pipe|dup2|open|chdir|getcwd"
+  - Shows ./jsh links ONLY libc.so.6 and calls fork, execvp, waitpid, pipe,
+    dup2, open, chdir, getcwd directly—with NO system() or popen().
+
+Proof 5 — Verbal Answer for the Teacher:
+  "Externally, a shell must behave like a shell so standard commands work.
+   What makes this an OS project is how it works underneath: zero system()
+   calls. Our C code manually parses commands, manipulates kernel file
+   descriptors with open()/dup2()/pipe()/close(), creates and replaces
+   processes via fork()/execvp(), handles SIGINT, and reaps every child via
+   waitpid()—which you can watch live using our 'trace on' mode."
+
+
+--------------------------------------------------------------------------------
+3. LIVE COMMANDS TO DEMONSTRATE TO THE TEACHER
+--------------------------------------------------------------------------------
+
+>>> QUICK 5-COMMAND SPOTLIGHT DEMO (IF SHORT ON TIME) <<<
+Run ./jsh and type these 5 commands in order:
+
+  1) ps -o pid,ppid,comm
+     -> Proves jsh is directly calling fork()/execvp() (PPID = jsh, not bash).
+
+  2) echo $HOME
+     -> Prints "$HOME" literally, proving our own C parser runs (NOT system()).
+
+  3) cd /tmp
+     pwd
+     cd -
+     -> Proves built-in cd runs chdir() in the parent shell process.
+
+  4) trace on
+     ls src | grep .c > out.txt
+     cat out.txt
+     trace off
+     -> The showstopper! Prints live pipe(), fork(), open(), dup2(), execvp(),
+        and waitpid() calls with real PIDs and FD numbers while running a
+        pipeline + redirection.
+
+  5) sleep 5   (press Ctrl+C after 1-2s)
+     rm out.txt
+     exit
+     -> Proves SIGINT kills only the foreground child ([130]) while jsh stays
+        alive, followed by clean exit.
+
+>>> FULL STEP-BY-STEP DEMO (MAPPED TO SYNOPSIS TESTS T1-T9) <<<
+
+Step 0: Build and run automated tests first (from a normal terminal):
+  cd "/home/tds/CollegeProjects/OPERATING SYSTEMS/jsh"
+  make clean && make
+  make test
+  ./jsh
+
+Now run these commands inside ./jsh in order (mapped to Synopsis Tests T1-T9):
+
+[Demo 1 - Help & Prompt]
+  help
+  -> Shows built-in commands (cd, pwd, trace, help, exit) and operators.
+
+[Demo 2 - T1 & T2: Built-in pwd and cd (Parent Process Execution)]
+  pwd
+  cd /tmp
+  pwd
+  cd -
+  pwd
+  -> Shows working directory changing inside jsh and switching back with cd -.
+
+[Demo 3 - T4: External Commands & Quoting]
+  ls -la
+  echo "Operating Systems Lab" 'JIIT B14'
+  ps -o pid,ppid,comm
+  -> Runs external binaries via fork() + execvp() + waitpid(), showing PPID=jsh.
+
+[Demo 4 - Proof of Custom Parser + T5: Error Recovery]
+  echo $HOME
+  invalidcommand123
+  echo hello |
+  echo "shell is still running"
+  -> Prints $HOME literally (no /bin/sh!), shows [127]/[2] errors, stays alive.
+
+[Demo 5 - T6 & T7: I/O Redirection (<, >, >>) & Redirected Built-in]
+  echo "First line" > demo.txt
+  echo "Second line" >> demo.txt
+  cat demo.txt
+  wc -l < demo.txt
+  pwd > mydir.txt
+  cat mydir.txt
+  -> '>' overwrites, '>>' appends, '<' redirects stdin, pwd > file works too.
+
+[Demo 6 - T8: Two-Command & Multi-Stage Pipelines]
+  ls | wc -l
+  ls src | grep .c | sort
+  ls -la | grep .txt > list.txt
+  cat list.txt
+  -> Demonstrates POSIX pipe() chaining and combining pipelines with '>'.
+
+[Demo 7 - Live OS Syscall & FD Visualizer (Highlight of Demo!)]
+  trace on
+  echo "traced" > trace_demo.txt
+  ls src | grep .c | wc -l
+  cd /tmp
+  cd -
+  trace off
+  -> Shows live [trace] output for parse, pipe(), fork(), open(), dup2(),
+     execvp(), waitpid(), and parent-only chdir() with exact PIDs and FDs!
+
+[Demo 8 - Signal Handling (Ctrl+C without killing jsh)]
+  sleep 10
+  (Press Ctrl+C after 1-2 seconds)
+  echo "jsh survived Ctrl+C!"
+  -> Terminates sleep (prompt shows [130]), while jsh stays alive.
+
+[Demo 9 - T9: Resource Cleanup Check (No FD Leaks or Zombies)]
+  ls /proc/self/fd | wc -l
+  ps -o pid,ppid,stat,comm
+  -> Shows no leaked file descriptors and no zombie ('Z') child processes.
+
+[Demo 10 - Cleanup & T3: Clean Exit]
+  rm demo.txt mydir.txt list.txt trace_demo.txt
+  exit
+  -> Exits jsh cleanly (can also demonstrate exit 0 or Ctrl+D).
+
+
+--------------------------------------------------------------------------------
+4. VIVA QUICK-REFERENCE SUMMARY
+--------------------------------------------------------------------------------
+
+A. What did we build?
+   jsh, a minimal interactive Linux shell in C11 using raw POSIX system calls
+   (getline, fork, execvp, waitpid, open, close, dup2, pipe, chdir, getcwd,
+   sigaction).
+
+B. Why do we need a shell?
+   Users cannot directly invoke kernel system calls. The shell is the user-space
+   command interpreter that translates typed commands into process creation,
+   file descriptor redirection, and IPC with the OS kernel.
+
+C. Why build this from scratch & how is it different from Bash/Zsh?
+   - Bash/Zsh have huge scripting engines, readline UI, job control, and
+     expansions that hide the underlying OS syscalls.
+   - jsh is strictly minimal (1,320 lines of core C) and modular (7 modules
+     matching Synopsis Sections 5.1-5.7), built purely on POSIX syscalls plus a
+     live 'trace on' syscall/FD visualizer for OS lab learning.
+
+D. What is the benefit of this project?
+   1. Practical Mastery of OS Internals: Bridges theory and practice by directly
+      implementing process lifecycles (fork/execvp/waitpid), IPC (pipe),
+      descriptor wiring (open/dup2/close), and signal handling (sigaction)
+      without high-level wrappers like system().
+   2. Live Kernel-Call Transparency ('trace on'): Unlike everyday shells that
+      behave like black boxes, jsh acts as a self-documenting OS lab tool—
+      visualizing every PID, file descriptor number, pipe endpoint, and exit
+      status in real time.
+   3. Lightweight, Auditable & Dependency-Free: Compiles strictly under C11 +
+      POSIX linking only libc, making it easy to embed in minimal Linux
+      environments, verify for zero FD/memory leaks, and extend module-by-module.
+
+E. Drawbacks / Limitations:
+   1. No background jobs (&, jobs, fg, bg, Ctrl+Z).
+   2. No variable ($HOME) or wildcard (*.c) expansion.
+   3. No command history (arrow keys) or tab completion.
+   4. No stderr redirection (2>, 2>&1) or heredocs (<<).
+   5. No logical chaining (&&, ||, ;) or shell scripting (if/for).
+
+F. Future Scope:
+   1. Background execution (&) with process groups and SIGCHLD reaping.
+   2. Raw terminal line editing (termios) for command history & tab completion.
+   3. Environment variable ($VAR) and wildcard (glob) expansion.
+   4. Conditional operators (&&, ||, ;) and stderr redirection (2>, 2>&1).
+   5. Script file execution (./jsh script.sh).
+================================================================================
